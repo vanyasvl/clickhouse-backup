@@ -3,13 +3,15 @@ package new_storage
 import (
 	"context"
 	"crypto/tls"
-	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path"
 	"strings"
 	"time"
+
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
 
 	"golang.org/x/sync/errgroup"
 
@@ -226,6 +228,7 @@ func (s *S3) Walk(s3Path string, recursive bool, process func(r RemoteFile) erro
 		var err error
 		for s3File := range s3Files {
 			if err == nil {
+				fmt.Println("File: ", s3File.name)
 				err = process(s3File)
 			}
 		}

@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"fmt"
-	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
-	"github.com/AlexAkulov/clickhouse-backup/pkg/progressbar"
 	"io"
 	"io/ioutil"
 	"log"
@@ -15,6 +13,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/progressbar"
 
 	"github.com/djherbis/buffer"
 	"github.com/mholt/archiver/v3"
@@ -394,6 +395,19 @@ func NewBackupDestination(cfg *config.Config) (*BackupDestination, error) {
 			cfg.General.DisableProgressBar,
 			cfg.General.BackupsToKeepRemote,
 		}, nil
+	// case "swift":
+	// 	swiftStorage := &SWIFT{
+	// 		Config: &cfg.SWIFT,
+	// 		Debug:  cfg.General.LogLevel == "debug",
+	// 	}
+	// 	return &BackupDestination{
+	// 		swiftStorage,
+	// 		cfg.SWIFT.Path,
+	// 		cfg.SWIFT.CompressionFormat,
+	// 		cfg.SWIFT.CompressionLevel,
+	// 		cfg.General.DisableProgressBar,
+	// 		cfg.General.BackupsToKeepRemote,
+	// 	}, nil
 	case "gcs":
 		googleCloudStorage := &GCS{Config: &cfg.GCS}
 		return &BackupDestination{

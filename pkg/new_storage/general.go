@@ -5,9 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
-	"github.com/AlexAkulov/clickhouse-backup/pkg/progressbar"
-	"github.com/AlexAkulov/clickhouse-backup/pkg/utils"
 	"io"
 	"io/ioutil"
 	"os"
@@ -17,6 +14,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/progressbar"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/utils"
 
 	"github.com/AlexAkulov/clickhouse-backup/pkg/metadata"
 	"golang.org/x/sync/errgroup"
@@ -580,6 +581,16 @@ func NewBackupDestination(cfg *config.Config) (*BackupDestination, error) {
 		}
 		return &BackupDestination{
 			s3Storage,
+			cfg.S3.CompressionFormat,
+			cfg.S3.CompressionLevel,
+			cfg.General.DisableProgressBar,
+		}, nil
+	case "swift":
+		swiftStorage := &SWIFT{
+			Config: &cfg.SWIFT,
+		}
+		return &BackupDestination{
+			swiftStorage,
 			cfg.S3.CompressionFormat,
 			cfg.S3.CompressionLevel,
 			cfg.General.DisableProgressBar,

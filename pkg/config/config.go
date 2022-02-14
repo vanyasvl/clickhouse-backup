@@ -3,13 +3,14 @@ package config
 import (
 	"crypto/tls"
 	"fmt"
-	"github.com/urfave/cli"
 	"io/ioutil"
 	"math"
 	"os"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/urfave/cli"
 
 	"github.com/apex/log"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -31,6 +32,7 @@ type Config struct {
 	API        APIConfig        `yaml:"api" envconfig:"_"`
 	FTP        FTPConfig        `yaml:"ftp" envconfig:"_"`
 	SFTP       SFTPConfig       `yaml:"sftp" envconfig:"_"`
+	SWIFT      SWIFTConfig      `yaml:"swift" envconfig:"_"`
 	AzureBlob  AzureBlobConfig  `yaml:"azblob" envconfig:"_"`
 }
 
@@ -98,6 +100,20 @@ type S3Config struct {
 	Concurrency             int    `yaml:"concurrency" envconfig:"S3_CONCURRENCY"`
 	PartSize                int64  `yaml:"part_size" envconfig:"S3_PART_SIZE"`
 	Debug                   bool   `yaml:"debug" envconfig:"S3_DEBUG"`
+}
+
+// SWIFTConfig - s3 settings section
+type SWIFTConfig struct {
+	UserName          string `yaml:"username" envconfig:"SWIFT_USERNAME"`
+	Password          string `yaml:"password" envconfig:"SWIFT_PASSWORD"`
+	AuthUrl           string `yaml:"auth_url" envconfig:"SWIFT_AUTHURL"`
+	Domain            string `yaml:"domain" envconfig:"SWIFT_DOMAIN"`
+	Tenant            string `yaml:"tenant" envconfig:"SWIFT_TENANT"`
+	Container         string `yaml:"container" envconfig:"SWIFT_CONTAINER"`
+	Debug             bool   `yaml:"debug" envconfig:"SWIFT_DEBUG"`
+	Path              string `yaml:"path" envconfig:"SWIFT_PATH"`
+	CompressionLevel  int    `yaml:"compression_level" envconfig:"SWIFT_COMPRESSION_LEVEL"`
+	CompressionFormat string `yaml:"compression_format" envconfig:"SWIFT_COMPRESSION_FORMAT"`
 }
 
 // COSConfig - cos settings section
@@ -209,6 +225,8 @@ func (cfg *Config) GetCompressionFormat() string {
 	switch cfg.General.RemoteStorage {
 	case "s3":
 		return cfg.S3.CompressionFormat
+	case "swift":
+		return cfg.SWIFT.CompressionFormat
 	case "gcs":
 		return cfg.GCS.CompressionFormat
 	case "cos":
