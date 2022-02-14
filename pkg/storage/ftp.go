@@ -2,12 +2,11 @@ package storage
 
 import (
 	"crypto/tls"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
 	"io"
 	"os"
 	"path"
 	"time"
-
-	"github.com/AlexAkulov/clickhouse-backup/config"
 
 	"github.com/jlaffaye/ftp"
 )
@@ -24,11 +23,9 @@ func (f *FTP) Connect() error {
 		return err
 	}
 
-	options := make([]ftp.DialOption, 0)
-
-	options = append(options, ftp.DialWithTimeout(timeout))
-	options = append(options, ftp.DialWithDisabledEPSV(true))
-
+	options := []ftp.DialOption{
+		ftp.DialWithTimeout(timeout),
+	}
 	if f.Debug {
 		options = append(options, ftp.DialWithDebugOutput(os.Stdout))
 	}

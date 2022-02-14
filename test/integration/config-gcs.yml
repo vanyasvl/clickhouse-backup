@@ -1,11 +1,16 @@
 general:
   disable_progress_bar: true
   remote_storage: gcs
+  upload_concurrency: 4
+  download_concurrency: 4
+  restore_schema_on_cluster: "cluster"
 clickhouse:
   host: 127.0.0.1
   port: 9000
   restart_command: bash -c 'echo "FAKE RESTART"'
 gcs:
-  bucket: clickhouse-backup-test-gcs
+  bucket: altinity-qa-test
   path: backup
   credentials_file: /etc/clickhouse-backup/credentials.json
+  compression_format: tar
+#  endpoint: http://gcs:8080/storage/v1/

@@ -3,14 +3,15 @@ package new_storage
 import (
 	"errors"
 	"fmt"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
 	"io"
 	"io/ioutil"
 	"path"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/AlexAkulov/clickhouse-backup/config"
 	"github.com/apex/log"
 	lib_sftp "github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -18,16 +19,21 @@ import (
 
 // SFTP Implement RemoteStorage
 type SFTP struct {
-	client   *lib_sftp.Client
-	Config   *config.SFTPConfig
-	dirCache map[string]struct{}
+	client *lib_sftp.Client
+	Config *config.SFTPConfig
+}
+
+func (sftp *SFTP) Debug(msg string, v ...interface{}) {
+	if sftp.Config.Debug {
+		log.Infof(msg, v...)
+	}
 }
 
 func (sftp *SFTP) Connect() error {
 	authMethods := []ssh.AuthMethod{}
 
 	if sftp.Config.Key == "" && sftp.Config.Password == "" {
-		return errors.New("please specify sftp.key or sftp.password for authentification")
+		return errors.New("please specify sftp.key or sftp.password for authentication")
 	}
 
 	if sftp.Config.Key != "" {
@@ -53,20 +59,26 @@ func (sftp *SFTP) Connect() error {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 	addr := fmt.Sprintf("%s:%d", sftp.Config.Address, sftp.Config.Port)
-	log.Debugf("try connect to tcp://%s", addr)
+	sftp.Debug("[SFTP_DEBUG] try connect to tcp://%s", addr)
 	sshConnection, err := ssh.Dial("tcp", addr, sftpConfig)
 	if err != nil {
 		return err
 	}
-
-	sftpConnection, err := lib_sftp.NewClient(sshConnection)
+	clientOptions := make([]lib_sftp.ClientOption, 0)
+	if sftp.Config.Concurrency > 0 {
+		clientOptions = append(
+			clientOptions,
+			lib_sftp.UseConcurrentReads(true),
+			lib_sftp.UseConcurrentWrites(true),
+			lib_sftp.MaxConcurrentRequestsPerFile(sftp.Config.Concurrency),
+		)
+	}
+	sftpConnection, err := lib_sftp.NewClient(sshConnection, clientOptions...)
 	if err != nil {
 		return err
 	}
 
 	sftp.client = sftpConnection
-
-	sftp.dirCache = map[string]struct{}{}
 	return nil
 }
 
@@ -79,6 +91,10 @@ func (sftp *SFTP) StatFile(key string) (RemoteFile, error) {
 
 	stat, err := sftp.client.Stat(filePath)
 	if err != nil {
+		sftp.Debug("[SFTP_DEBUG] StatFile::STAT %s return error %v", filePath, err)
+		if strings.Contains(err.Error(), "not exist") {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 
@@ -90,10 +106,12 @@ func (sftp *SFTP) StatFile(key string) (RemoteFile, error) {
 }
 
 func (sftp *SFTP) DeleteFile(key string) error {
+	sftp.Debug("[SFTP_DEBUG] Delete %s", key)
 	filePath := path.Join(sftp.Config.Path, key)
 
 	fileStat, err := sftp.client.Stat(filePath)
 	if err != nil {
+		sftp.Debug("[SFTP_DEBUG] Delete::STAT %s return error %v", filePath, err)
 		return err
 	}
 	if fileStat.IsDir() {
@@ -104,10 +122,12 @@ func (sftp *SFTP) DeleteFile(key string) error {
 }
 
 func (sftp *SFTP) DeleteDirectory(dirPath string) error {
+	sftp.Debug("[SFTP_DEBUG] DeleteDirectory %s", dirPath)
 	defer sftp.client.RemoveDirectory(dirPath)
 
 	files, err := sftp.client.ReadDir(dirPath)
 	if err != nil {
+		sftp.Debug("[SFTP_DEBUG] DeleteDirectory::ReadDir %s return error %v", dirPath, err)
 		return err
 	}
 	for _, file := range files {
@@ -124,6 +144,7 @@ func (sftp *SFTP) DeleteDirectory(dirPath string) error {
 
 func (sftp *SFTP) Walk(remotePath string, recursive bool, process func(RemoteFile) error) error {
 	dir := path.Join(sftp.Config.Path, remotePath)
+	sftp.Debug("[SFTP_DEBUG] Walk %s, recursive=%v", dir, recursive)
 
 	if recursive {
 		walker := sftp.client.Walk(dir)
@@ -148,6 +169,7 @@ func (sftp *SFTP) Walk(remotePath string, recursive bool, process func(RemoteFil
 	} else {
 		entries, err := sftp.client.ReadDir(dir)
 		if err != nil {
+			sftp.Debug("[SFTP_DEBUG] Walk::NonRecursive::ReadDir %s return error %v", dir, err)
 			return err
 		}
 		for _, entry := range entries {

@@ -2,14 +2,13 @@ package new_storage
 
 import (
 	"context"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
 	"io"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
 	"time"
-
-	"github.com/AlexAkulov/clickhouse-backup/config"
 
 	"github.com/tencentyun/cos-go-sdk-v5"
 	"github.com/tencentyun/cos-go-sdk-v5/debug"
@@ -18,7 +17,6 @@ import (
 type COS struct {
 	client *cos.Client
 	Config *config.COSConfig
-	Debug  bool
 }
 
 // Connect - connect to cos
@@ -39,9 +37,9 @@ func (c *COS) Connect() error {
 			SecretKey: c.Config.SecretKey,
 			// request debug
 			Transport: &debug.DebugRequestTransport{
-				RequestHeader:  c.Debug,
+				RequestHeader:  c.Config.Debug,
 				RequestBody:    false,
-				ResponseHeader: c.Debug,
+				ResponseHeader: c.Config.Debug,
 				ResponseBody:   false,
 			},
 		},
@@ -78,11 +76,23 @@ func (c *COS) DeleteFile(key string) error {
 	return err
 }
 
-func (c *COS) Walk(cosPath string, recursuve bool, process func(RemoteFile) error) error {
-	prefix := path.Join(c.Config.Path, cosPath)
+func (c *COS) Walk(cosPath string, recursive bool, process func(RemoteFile) error) error {
+	// COS needs prefix ended with "/".
+	prefix := path.Join(c.Config.Path, cosPath) + "/"
+
 	delimiter := ""
-	if !recursuve {
+	if !recursive {
+		//
+		// When delimiter is "/", we only process all backups in the CommonPrefixes field of response.
+		// Then we get backupLists.
+		//
 		delimiter = "/"
+	} else {
+		//
+		// When delimiter is an empty string, we  process the items under specified path.
+		// Then we can Delete File object.
+		//
+		delimiter = ""
 	}
 	res, _, err := c.client.Bucket.Get(context.Background(), &cos.BucketGetOptions{
 		Delimiter: delimiter,
@@ -91,6 +101,7 @@ func (c *COS) Walk(cosPath string, recursuve bool, process func(RemoteFile) erro
 	if err != nil {
 		return err
 	}
+	// When recursive is false, only process all the backups in the CommonPrefixes part.
 	for _, dir := range res.CommonPrefixes {
 		if err := process(&cosFile{
 			name: strings.TrimPrefix(dir, prefix),
@@ -98,14 +109,16 @@ func (c *COS) Walk(cosPath string, recursuve bool, process func(RemoteFile) erro
 			return err
 		}
 	}
-	for _, v := range res.Contents {
-		modifiedTime, _ := parseTime(v.LastModified)
-		if err := process(&cosFile{
-			name:         strings.TrimPrefix(v.Key, prefix),
-			lastModified: modifiedTime,
-			size:         int64(v.Size),
-		}); err != nil {
-			return err
+	if recursive {
+		for _, v := range res.Contents {
+			modifiedTime, _ := parseTime(v.LastModified)
+			if err := process(&cosFile{
+				name:         strings.TrimPrefix(v.Key, prefix),
+				lastModified: modifiedTime,
+				size:         int64(v.Size),
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"fmt"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/progressbar"
 	"io"
 	"io/ioutil"
 	"log"
@@ -14,11 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AlexAkulov/clickhouse-backup/config"
-	"github.com/AlexAkulov/clickhouse-backup/internal/progressbar"
-
 	"github.com/djherbis/buffer"
-	"github.com/mholt/archiver"
+	"github.com/mholt/archiver/v3"
 	"gopkg.in/djherbis/nio.v2"
 )
 

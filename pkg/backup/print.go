@@ -3,6 +3,7 @@ package backup
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
 	"io"
 	"io/ioutil"
 	"os"
@@ -11,11 +12,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/AlexAkulov/clickhouse-backup/config"
 	"github.com/AlexAkulov/clickhouse-backup/pkg/clickhouse"
 	"github.com/AlexAkulov/clickhouse-backup/pkg/metadata"
 	"github.com/AlexAkulov/clickhouse-backup/pkg/new_storage"
-	"github.com/AlexAkulov/clickhouse-backup/utils"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/utils"
 )
 
 func printBackupsRemote(w io.Writer, backupList []new_storage.Backup, format string) error {
@@ -187,7 +187,7 @@ func PrintAllBackups(cfg *config.Config, format string) error {
 	printBackupsLocal(w, localBackups, format)
 
 	if cfg.General.RemoteStorage != "none" {
-		remoteBackups, err := GetRemoteBackups(cfg)
+		remoteBackups, err := GetRemoteBackups(cfg, true)
 		if err != nil {
 			return err
 		}
@@ -200,7 +200,7 @@ func PrintAllBackups(cfg *config.Config, format string) error {
 func PrintRemoteBackups(cfg *config.Config, format string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', tabwriter.DiscardEmptyColumns)
 	defer w.Flush()
-	backupList, err := GetRemoteBackups(cfg)
+	backupList, err := GetRemoteBackups(cfg, true)
 	if err != nil {
 		return err
 	}
@@ -224,7 +224,7 @@ func getLocalBackup(cfg *config.Config, backupName string) (*BackupLocal, error)
 }
 
 // GetRemoteBackups - get all backups stored on remote storage
-func GetRemoteBackups(cfg *config.Config) ([]new_storage.Backup, error) {
+func GetRemoteBackups(cfg *config.Config, parseMetadata bool) ([]new_storage.Backup, error) {
 	if cfg.General.RemoteStorage == "none" {
 		return nil, fmt.Errorf("remote_storage is 'none'")
 	}
@@ -235,16 +235,23 @@ func GetRemoteBackups(cfg *config.Config) ([]new_storage.Backup, error) {
 	if err := bd.Connect(); err != nil {
 		return []new_storage.Backup{}, err
 	}
-
-	backupList, err := bd.BackupList()
+	backupList, err := bd.BackupList(parseMetadata, "")
 	if err != nil {
 		return []new_storage.Backup{}, err
+	}
+	// ugly hack to fix https://github.com/AlexAkulov/clickhouse-backup/issues/309
+	if parseMetadata == false && len(backupList) > 0 {
+		lastBackup := backupList[len(backupList)-1]
+		backupList, err = bd.BackupList(true, lastBackup.BackupName)
+		if err != nil {
+			return []new_storage.Backup{}, err
+		}
 	}
 	return backupList, err
 }
 
-// getTables - get all tables for use by PrintTables and API
-func GetTables(cfg config.Config) ([]clickhouse.Table, error) {
+// GetTables - get all tables for use by PrintTables and API
+func GetTables(cfg *config.Config) ([]clickhouse.Table, error) {
 	ch := &clickhouse.ClickHouse{
 		Config: &cfg.ClickHouse,
 	}
@@ -254,7 +261,7 @@ func GetTables(cfg config.Config) ([]clickhouse.Table, error) {
 	}
 	defer ch.Close()
 
-	allTables, err := ch.GetTables()
+	allTables, err := ch.GetTables("")
 	if err != nil {
 		return []clickhouse.Table{}, fmt.Errorf("can't get tables: %v", err)
 	}
@@ -262,7 +269,7 @@ func GetTables(cfg config.Config) ([]clickhouse.Table, error) {
 }
 
 // PrintTables - print all tables suitable for backup
-func PrintTables(cfg config.Config, printAll bool) error {
+func PrintTables(cfg *config.Config, printAll bool) error {
 	ch := &clickhouse.ClickHouse{
 		Config: &cfg.ClickHouse,
 	}
@@ -289,10 +296,10 @@ func PrintTables(cfg config.Config, printAll bool) error {
 			tableDisks = append(tableDisks, disk)
 		}
 		if table.Skip {
-			fmt.Fprintf(w, "%s.%s\t%s\t%v\tskip\n", table.Database, table.Name, utils.FormatBytes(table.TotalBytes.Int64), strings.Join(tableDisks, ","))
+			fmt.Fprintf(w, "%s.%s\t%s\t%v\tskip\n", table.Database, table.Name, utils.FormatBytes(table.TotalBytes), strings.Join(tableDisks, ","))
 			continue
 		}
-		fmt.Fprintf(w, "%s.%s\t%s\t%v\t\n", table.Database, table.Name, utils.FormatBytes(table.TotalBytes.Int64), strings.Join(tableDisks, ","))
+		fmt.Fprintf(w, "%s.%s\t%s\t%v\t\n", table.Database, table.Name, utils.FormatBytes(table.TotalBytes), strings.Join(tableDisks, ","))
 	}
 	w.Flush()
 	return nil

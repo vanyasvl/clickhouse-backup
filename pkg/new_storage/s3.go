@@ -3,23 +3,26 @@ package new_storage
 import (
 	"context"
 	"crypto/tls"
+	"github.com/AlexAkulov/clickhouse-backup/pkg/config"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
 
-	"github.com/AlexAkulov/clickhouse-backup/config"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/apex/log"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/pkg/errors"
 )
 
@@ -37,7 +40,7 @@ func (S3LogToApexLogAdapter *S3LogToApexLogAdapter) Log(args ...interface{}) {
 	if len(args) > 1 {
 		S3LogToApexLogAdapter.apexLog.Infof(args[0].(string), args[1:]...)
 	} else {
-		S3LogToApexLogAdapter.apexLog.Infof(args[0].(string))
+		S3LogToApexLogAdapter.apexLog.Info(args[0].(string))
 	}
 }
 
@@ -45,6 +48,7 @@ func (S3LogToApexLogAdapter *S3LogToApexLogAdapter) Log(args ...interface{}) {
 type S3 struct {
 	session     *session.Session
 	uploader    *s3manager.Uploader
+	downloader  *s3manager.Downloader
 	Config      *config.S3Config
 	PartSize    int64
 	Concurrency int
@@ -57,15 +61,29 @@ func (s *S3) Connect() error {
 
 	awsDefaults := defaults.Get()
 	defaultCredProviders := defaults.CredProviders(awsDefaults.Config, awsDefaults.Handlers)
+	customCredProviders := defaultCredProviders
 
-	// Define custom static cred provider
-	staticCreds := &credentials.StaticProvider{Value: credentials.Value{
-		AccessKeyID:     s.Config.AccessKey,
-		SecretAccessKey: s.Config.SecretKey,
-	}}
+	if s.Config.AccessKey != "" && s.Config.SecretKey != "" {
+		// Define custom static cred provider
+		staticCreds := &credentials.StaticProvider{Value: credentials.Value{
+			AccessKeyID:     s.Config.AccessKey,
+			SecretAccessKey: s.Config.SecretKey,
+		}}
+		// Append static creds to the defaults
+		customCredProviders = append([]credentials.Provider{staticCreds}, customCredProviders...)
+	}
 
-	// Append static creds to the defaults
-	customCredProviders := append([]credentials.Provider{staticCreds}, defaultCredProviders...)
+	awsRoleARN := os.Getenv("AWS_ROLE_ARN")
+	awsWebIdentityTokenFile := os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+	if awsRoleARN != "" && awsWebIdentityTokenFile != "" {
+		cfg := &aws.Config{
+			Region: aws.String(s.Config.Region),
+		}
+		stsSvc := sts.New(session.Must(session.NewSession(cfg)))
+		stsProvider := stscreds.NewWebIdentityRoleProvider(stsSvc, awsRoleARN, "", awsWebIdentityTokenFile)
+		customCredProviders = append([]credentials.Provider{stsProvider}, customCredProviders...)
+	}
+
 	creds := credentials.NewChainCredentials(customCredProviders)
 
 	var awsConfig = &aws.Config{
@@ -87,6 +105,12 @@ func (s *S3) Connect() error {
 		}
 		awsConfig.HTTPClient = &http.Client{Transport: tr}
 	}
+
+	if s.Config.AssumeRoleARN != "" {
+		/// Reference to regular credentials chain is to be copied into `stscreds` credentials.
+		awsConfig.Credentials = stscreds.NewCredentials(session.Must(session.NewSession(awsConfig)), s.Config.AssumeRoleARN)
+	}
+
 	if s.session, err = session.NewSession(awsConfig); err != nil {
 		return err
 	}
@@ -96,6 +120,11 @@ func (s *S3) Connect() error {
 	s.uploader.BufferProvider = s3manager.NewBufferedReadSeekerWriteToPool(s.BufferSize)
 	s.uploader.PartSize = s.PartSize
 
+	s.downloader = s3manager.NewDownloader(s.session)
+	s.downloader.Concurrency = s.Concurrency
+	s.downloader.BufferProvider = s3manager.NewPooledBufferedWriterReadFromProvider(s.BufferSize)
+	s.downloader.PartSize = s.PartSize
+
 	return nil
 }
 
@@ -104,17 +133,19 @@ func (s *S3) Kind() string {
 }
 
 func (s *S3) GetFileReader(key string) (io.ReadCloser, error) {
-	// downloader := s3manager.NewDownloader(s.session)
-	// downloader.Concurrency = s.Concurrency
-	// downloader.BufferProvider = s3manager.NewPooledBufferedWriterReadFromProvider(s.BufferSize)
-	// w:= aws.NewWriteAt()
-	// downloader.
-	// downloader.Download(w, &s3.GetObjectInput{
-	// 	Bucket: aws.String(s.Config.Bucket),
-	// 	Key:    aws.String(path.Join(s.Config.Path, key)),
-	// }
-
-	// )
+	/* unfortunately, multipart download require allocate additional disk space and don't allow us to decompress data in streaming model
+	writer, err := os.CreateTemp()
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.downloader.Download(writer, &s3.GetObjectInput{
+		Bucket: aws.String(s.Config.Bucket),
+		Key:    aws.String(path.Join(s.Config.Path, key)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	*/
 
 	svc := s3.New(s.session)
 	req, resp := svc.GetObjectRequest(&s3.GetObjectInput{
@@ -192,9 +223,10 @@ func (s *S3) Walk(s3Path string, recursive bool, process func(r RemoteFile) erro
 		})
 	})
 	g.Go(func() error {
+		var err error
 		for s3File := range s3Files {
-			if err := process(s3File); err != nil {
-				return err
+			if err == nil {
+				err = process(s3File)
 			}
 		}
 		return nil

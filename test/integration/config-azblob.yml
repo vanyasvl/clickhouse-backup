@@ -1,11 +1,18 @@
 general:
   disable_progress_bar: true
   remote_storage: azblob
+  upload_concurrency: 4
+  download_concurrency: 4
+  restore_schema_on_cluster: "cluster"
 clickhouse:
   host: 127.0.0.1
   port: 9000
   restart_command: bash -c 'echo "FAKE RESTART"'
 azblob:
-  account_name: clickhousebackuptest
+  # account_name: clickhousebackuptest
+  account_name: devstoreaccount1
+  account_key: Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+  endpoint_suffix: azure:10000
   container: container1
   path: backup
+  compression_format: tar

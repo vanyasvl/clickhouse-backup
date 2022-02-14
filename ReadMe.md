@@ -77,9 +77,10 @@ COMMANDS:
    restore_remote  Download and restore
    delete          Delete specific backup
    default-config  Print default config
+   print-config    Print current config
+   clean           Remove data in 'shadow' folder from all `path` folders available from `system.disks`
    server          Run API server
    help, h         Shows a list of commands or help for one command
-
 GLOBAL OPTIONS:
    --config FILE, -c FILE  Config FILE name. (default: "/etc/clickhouse-backup/config.yml") [$CLICKHOUSE_BACKUP_CONFIG]
    --help, -h              show help
@@ -103,6 +104,9 @@ general:
   allow_empty_backups: false     # ALLOW_EMPTY_BACKUPS
   download_concurrency: 1        # DOWNLOAD_CONCURRENCY, max 255
   upload_concurrency: 1          # UPLOAD_CONCURRENCY, max 255
+  restore_schema_on_cluster: ""  # RESTORE_SCHEMA_ON_CLUSTER, look to system.clusters for proper cluster name
+  upload_by_part: true           # UPLOAD_BY_PART
+  download_by_part: true         # DOWNLOAD_BY_PART
 clickhouse:
   username: default                # CLICKHOUSE_USERNAME
   password: ""                     # CLICKHOUSE_PASSWORD
@@ -111,26 +115,31 @@ clickhouse:
   disk_mapping: {}                 # CLICKHOUSE_DISK_MAPPING
   skip_tables:                     # CLICKHOUSE_SKIP_TABLES
     - system.*
+    - INFORMATION_SCHEMA.*
+    - information_schema.*
   timeout: 5m                      # CLICKHOUSE_TIMEOUT
   freeze_by_part: false            # CLICKHOUSE_FREEZE_BY_PART
   secure: false                    # CLICKHOUSE_SECURE
   skip_verify: false               # CLICKHOUSE_SKIP_VERIFY
   sync_replicated_tables: true     # CLICKHOUSE_SYNC_REPLICATED_TABLES
   log_sql_queries: true            # CLICKHOUSE_LOG_SQL_QUERIES
-
+  debug: false                     # CLICKHOUSE_DEBUG
   config_dir:      "/etc/clickhouse-server"              # CLICKHOUSE_CONFIG_DIR
   restart_command: "systemctl restart clickhouse-server" # CLICKHOUSE_RESTART_COMMAND
-
+  ignore_not_exists_error_during_freeze: true # CLICKHOUSE_IGNORE_NOT_EXISTS_ERROR_DURING_FREEZE
 azblob:
   endpoint_suffix: "core.windows.net" # AZBLOB_ENDPOINT_SUFFIX
   account_name: ""             # AZBLOB_ACCOUNT_NAME
   account_key: ""              # AZBLOB_ACCOUNT_KEY
   sas: ""                      # AZBLOB_SAS
+  use_managed_identity: false  # AZBLOB_USE_MANAGED_IDENTITY
   container: ""                # AZBLOB_CONTAINER
   path: ""                     # AZBLOB_PATH
   compression_level: 1         # AZBLOB_COMPRESSION_LEVEL
   compression_format: tar      # AZBLOB_COMPRESSION_FORMAT
   sse_key: ""                  # AZBLOB_SSE_KEY
+  buffer_size: 0               # AZBLOB_BUFFER_SIZE, if less or eq 0 then calculated as max_file_size / 10000, between 2Mb and 4Mb
+  max_buffers: 3               # AZBLOB_MAX_BUFFERS
 s3:
   access_key: ""                   # S3_ACCESS_KEY
   secret_key: ""                   # S3_SECRET_KEY
@@ -138,16 +147,17 @@ s3:
   endpoint: ""                     # S3_ENDPOINT
   region: us-east-1                # S3_REGION
   acl: private                     # S3_ACL
+  assume_role_arn: ""              # S3_ASSUME_ROLE_ARN
   force_path_style: false          # S3_FORCE_PATH_STYLE
   path: ""                         # S3_PATH
   disable_ssl: false               # S3_DISABLE_SSL
   compression_level: 1             # S3_COMPRESSION_LEVEL
-  # supports 'tar', 'gzip', 'zstd', 'brotli'
-  compression_format: tar          # S3_COMPRESSION_FORMAT
-  # empty (default), AES256, or aws:kms
-  sse: AES256                      # S3_SSE
+  compression_format: tar          # S3_COMPRESSION_FORMAT, supports 'tar', 'gzip', 'zstd', 'brotli'
+  sse: ""                          # S3_SSE, empty (default), AES256, or aws:kms
   disable_cert_verification: false # S3_DISABLE_CERT_VERIFICATION
   storage_class: STANDARD          # S3_STORAGE_CLASS
+  concurrency: 1                   # S3_CONCURRENCY
+  part_size: 0                     # S3_PART_SIZE, if less or eq 0 then calculated as max_file_size / 10000
   debug: false                     # S3_DEBUG
 gcs:
   credentials_file: ""         # GCS_CREDENTIALS_FILE
@@ -156,6 +166,7 @@ gcs:
   path: ""                     # GCS_PATH
   compression_level: 1         # GCS_COMPRESSION_LEVEL
   compression_format: tar      # GCS_COMPRESSION_FORMAT
+  debug: false                 # GCS_DEBUG
 cos:
   url: ""                      # COS_URL
   timeout: 2m                  # COS_TIMEOUT
@@ -164,16 +175,6 @@ cos:
   path: ""                     # COS_PATH
   compression_format: tar      # COS_COMPRESSION_FORMAT
   compression_level: 1         # COS_COMPRESSION_LEVEL
-api:
-  listen: "localhost:7171"     # API_LISTEN
-  enable_metrics: true         # API_ENABLE_METRICS
-  enable_pprof: false          # API_ENABLE_PPROF
-  username: ""                 # API_USERNAME
-  password: ""                 # API_PASSWORD
-  secure: false                # API_SECURE
-  certificate_file: ""         # API_CERTIFICATE_FILE
-  private_key_file: ""         # API_PRIVATE_KEY_FILE
-  create_integration_tables: false # API_CREATE_INTEGRATION_TABLES
 ftp:
   address: ""                  # FTP_ADDRESS
   timeout: 2m                  # FTP_TIMEOUT
@@ -190,8 +191,20 @@ sftp:
   password: ""                 # SFTP_PASSWORD
   key: ""                      # SFTP_KEY
   path: ""                     # SFTP_PATH
+  concurrency: 1               # SFTP_CONCURRENCY     
   compression_format: tar      # SFTP_COMPRESSION_FORMAT
   compression_level: 1         # SFTP_COMPRESSION_LEVEL
+  debug: false                 # SFTP_DEBUG
+api:
+  listen: "localhost:7171"     # API_LISTEN
+  enable_metrics: true         # API_ENABLE_METRICS
+  enable_pprof: false          # API_ENABLE_PPROF
+  username: ""                 # API_USERNAME
+  password: ""                 # API_PASSWORD
+  secure: false                # API_SECURE
+  certificate_file: ""         # API_CERTIFICATE_FILE
+  private_key_file: ""         # API_PRIVATE_KEY_FILE
+  create_integration_tables: false # API_CREATE_INTEGRATION_TABLES
 ```
 
 ## ATTENTION!
@@ -204,6 +217,14 @@ That might lead to data corruption.
 ## API
 Use the `clickhouse-backup server` command to run as a REST API server. In general, the API attempts to mirror the CLI commands.
 
+> **GET /**
+
+List all current applicable HTTP routes
+
+> **POST /restart**
+
+Restart HTTP server, close all current connections, close listen socket, open listen socket again, all background go-routines with upload / download not breaks (maybe will in future)
+
 > **GET /backup/tables**
 
 Print list of tables: `curl -s localhost:7171/backup/tables | jq .`
@@ -212,30 +233,46 @@ Print list of tables: `curl -s localhost:7171/backup/tables | jq .`
 
 Create new backup: `curl -s localhost:7171/backup/create -X POST | jq .`
 * Optional query argument `table` works the same as the `--table value` CLI argument.
+* Optional query argument `partitions` works the same as the `--partitions value` CLI argument.
 * Optional query argument `name` works the same as specifying a backup name with the CLI.
 * Optional query argument `schema` works the same the `--schema` CLI argument (backup schema only).
-* Optional query argument `rbac` works the same the `--rbac` CLI argument (backup RBAC only).
-* Optional query argument `configs` works the same the `--configs` CLI argument (backup configs only).
+* Optional query argument `rbac` works the same the `--rbac` CLI argument (backup RBAC).
+* Optional query argument `configs` works the same the `--configs` CLI argument (backup configs).
 * Full example: `curl -s 'localhost:7171/backup/create?table=default.billing&name=billing_test' -X POST`
 
 Note: this operation is async, so the API will return once the operation has been started.
+
+> **POST /backup/clean**
+
+Clean `shadow` folder on all available path from `system.disks`
+
 
 > **POST /backup/upload**
 
 Upload backup to remote storage: `curl -s localhost:7171/backup/upload/<BACKUP_NAME> -X POST | jq .`
 * Optional query argument `diff-from` works the same as the `--diff-from` CLI argument.
+* Optional query argument `diff-from-remote` works the same as the `--diff-from-remote` CLI argument.
+* Optional query argument `table` works the same as the `--table value` CLI argument.
+* Optional query argument `partitions` works the same as the `--partitions value` CLI argument.
+* Optional query argument `schema` works the same as the `--schema` CLI argument (upload schema only).
 
 Note: this operation is async, so the API will return once the operation has been started.
 
-> **GET /backup/list**
+> **GET /backup/list/{where}**
 
 Print list of backups: `curl -s localhost:7171/backup/list | jq .`
+Print list only local backups: `curl -s localhost:7171/backup/list/local | jq .`
+Print list only remote backups: `curl -s localhost:7171/backup/list/remote | jq .`
 
 Note: The `Size` field is not populated for local backups.
 
 > **POST /backup/download**
 
 Download backup from remote storage: `curl -s localhost:7171/backup/download/<BACKUP_NAME> -X POST | jq .`
+* Optional query argument `table` works the same as the `--table value` CLI argument.
+* Optional query argument `partitions` works the same as the `--partitions value` CLI argument.
+* Optional query argument `schema` works the same the `--schema` CLI argument (download schema only).
+
 
 Note: this operation is async, so the API will return once the operation has been started.
 
@@ -243,10 +280,12 @@ Note: this operation is async, so the API will return once the operation has bee
 
 Create schema and restore data from backup: `curl -s localhost:7171/backup/restore/<BACKUP_NAME> -X POST | jq .`
 * Optional query argument `table` works the same as the `--table value` CLI argument.
+* Optional query argument `partitions` works the same as the `--partitions value` CLI argument.
 * Optional query argument `schema` works the same the `--schema` CLI argument (restore schema only).
 * Optional query argument `data` works the same the `--data` CLI argument (restore data only).
-* Optional query argument `rbac` works the same the `--rbac` CLI argument (restore RBAC only).
-* Optional query argument `configs` works the same the `--configs` CLI argument (restore configs only).
+* Optional query argument `rm` works the same the `--rm` CLI argument (drop tables before restore).
+* Optional query argument `rbac` works the same the `--rbac` CLI argument (restore RBAC).
+* Optional query argument `configs` works the same the `--configs` CLI argument (restore configs).
 
 > **POST /backup/delete**
 
@@ -256,7 +295,7 @@ Delete specific local backup: `curl -s localhost:7171/backup/delete/local/<BACKU
 
 > **GET /backup/status**
 
-Display list of current async operations: `curl -s localhost:7171/backup/status | jq .`
+Display list of current running async operation: `curl -s localhost:7171/backup/status | jq .`
 
 > **POST /backup/actions**
 
@@ -264,7 +303,38 @@ Execute multiple backup actions: `curl -X POST -d '{"command":"create test_backu
 
 > **GET /backup/actions**
 
-Display list of current async operations: `curl -s localhost:7171/backup/status | jq .`
+Display list of all operations from start of API server: `curl -s localhost:7171/backup/actions | jq .`
+* Optional query argument `filter` could filter actions on server side.
+* Optional query argument `last` could filter show only last `XX` actions.
+
+## Storages
+
+### S3
+
+In order to make backups to S3, the following permissions shall be set:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "clickhouse-backup-s3-access-to-files",
+            "Effect": "Allow",
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject"
+            ],
+            "Resource": "arn:aws:s3:::BUCKET_NAME/*"
+        },
+        {
+            "Sid": "clickhouse-backup-s3-access-to-bucket",
+            "Effect": "Allow",
+            "Action": "s3:ListBucket",
+            "Resource": "arn:aws:s3:::BUCKET_NAME"
+        }
+    ]
+}
+```
 
 ## Examples
 
